@@ -22,10 +22,17 @@ ATTRS = ["subtlety", "internalStructure", "calcification", "sphericity",
 
 
 def numpy_compat_shim():
-    """pylidc still uses removed NumPy aliases (np.int, np.bool, ...). Restore them before importing pylidc."""
+    """pylidc is unmaintained and uses APIs removed from modern NumPy / Python.
+    Restore them BEFORE importing pylidc:
+      - np.int / np.bool / np.float / np.object  (removed in NumPy 1.24)
+      - configparser.SafeConfigParser            (removed in Python 3.12)
+    """
     for name, typ in [("int", int), ("bool", bool), ("float", float), ("object", object)]:
         if name not in np.__dict__:
             setattr(np, name, typ)
+    import configparser
+    if not hasattr(configparser, "SafeConfigParser"):
+        configparser.SafeConfigParser = configparser.ConfigParser
 
 
 def configure_pylidc(raw_root: Path):
