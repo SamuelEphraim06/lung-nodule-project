@@ -64,7 +64,7 @@ def download_batch(scans, raw_root: Path, tmp_dl: Path):
         shutil.move(str(src), str(dst))
 
 
-def process_scan(scan, out_dir: Path, size: int):
+def process_scan(scan, out_dir: Path, size: int, scan_idx: int = 0):
     vol = scan.to_volume(verbose=False)
     lo, hi = int(vol.min()), int(vol.max())
     # Sanity: HU volumes normally have min near -1000..-3000 and max in the hundreds/thousands.
@@ -86,13 +86,16 @@ def process_scan(scan, out_dir: Path, size: int):
         need = int(np.ceil(len(anns) / 2))
         mask = (cp >= need).astype(np.uint8)
 
-        fname = f"{scan.patient_id}_n{n_idx:02d}.npz"
+        # 8 LIDC patients have 2 scans. scan 0 keeps the original name (backward compatible);
+        # later scans get an _s<k> tag so they cannot overwrite each other.
+        tag = "" if scan_idx == 0 else f"_s{scan_idx}"
+        fname = f"{scan.patient_id}{tag}_n{n_idx:02d}.npz"
         np.savez_compressed(out_dir / "patches" / fname,
                             ct=np.clip(ct, -1024, 3071).astype(np.int16), mask=mask)
 
         rec = dict(
             patient_id=scan.patient_id, series_uid=scan.series_instance_uid,
-            nodule_idx=n_idx, n_readers=len(anns), cluster_too_big=len(anns) > 4,
+            scan_idx=scan_idx, nodule_idx=n_idx, n_readers=len(anns), cluster_too_big=len(anns) > 4,
             center_ijk=[float(x) for x in center],
             diameter_mm=float(np.mean([a.diameter for a in anns])),
             slice_thickness=float(scan.slice_thickness),
@@ -115,6 +118,8 @@ def main():
     ap.add_argument("--size", type=int, default=96)
     ap.add_argument("--batch", type=int, default=10, help="patients per download call")
     ap.add_argument("--keep-raw", action="store_true")
+    ap.add_argument("--ids", type=int, nargs="+", help="process only these patient numbers (overrides --start/--end)")
+    ap.add_argument("--redo", action="store_true", help="delete existing outputs for the selected patients first")
     args = ap.parse_args()
 
     args.raw.mkdir(parents=True, exist_ok=True)
@@ -125,7 +130,12 @@ def main():
     configure_pylidc(args.raw)
     import pylidc as pl  # must come after configure_pylidc
 
-    ids = [pid(i) for i in range(args.start, args.end + 1)]
+    ids = [pid(i) for i in (args.ids if args.ids else range(args.start, args.end + 1))]
+    if args.redo:
+        for p in ids:
+            for f in (args.out / "patches").glob(f"{p}_*.npz"):
+                f.unlink()
+            (args.out / "meta" / f"{p}.json").unlink(missing_ok=True)
     todo = [p for p in ids if not (args.out / "meta" / f"{p}.json").exists()]
     print(f"{len(ids)} requested, {len(todo)} to do (others already done)")
 
@@ -146,9 +156,10 @@ def main():
         for p in batch_ids:
             recs = []
             ok = True
-            for scan in [s for s in scans if s.patient_id == p]:
+            for scan_idx, scan in enumerate(sorted([s for s in scans if s.patient_id == p],
+                                                    key=lambda s: s.series_instance_uid)):
                 try:
-                    recs += process_scan(scan, args.out, args.size)
+                    recs += process_scan(scan, args.out, args.size, scan_idx)
                 except Exception as e:
                     ok = False
                     print(f"  FAILED {p}: {e!r}")
