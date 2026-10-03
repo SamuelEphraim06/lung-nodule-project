@@ -1,0 +1,9 @@
+numpy
+scipy
+pandas
+matplotlib
+pydicom
+SimpleITK
+pylidc
+tcia_utils
+# pylidc may need an older numpy on some setups (see README notes)
