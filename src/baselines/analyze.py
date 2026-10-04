@@ -18,12 +18,14 @@ from sklearn.metrics import roc_auc_score
 ap = argparse.ArgumentParser()
 ap.add_argument("--data", type=Path, required=True, help="folder with splits.csv")
 ap.add_argument("--results", type=Path, required=True, help="folder with oof_predictions.csv")
+ap.add_argument("--oof", nargs="+", default=["oof_predictions.csv"],
+                help="prediction files; names are relative to --results unless absolute (e.g. several models)")
 ap.add_argument("--ref", default="size_only"); ap.add_argument("--main", default="xgb_raw")
 ap.add_argument("--boot", type=int, default=2000)
 a = ap.parse_args()
 figs = a.results / "figs"; figs.mkdir(exist_ok=True)
 
-oof = pd.read_csv(a.results / "oof_predictions.csv")
+oof = pd.concat([pd.read_csv(f if Path(f).is_absolute() else a.results / f) for f in a.oof], ignore_index=True)
 sp = pd.read_csv(a.data / "splits.csv")[["patch_file", "diameter_mm", "mal_std", "n_readers"]]
 oof = oof.merge(sp, on="patch_file", how="left")
 models = list(oof.model.unique()); out = {}
