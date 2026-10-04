@@ -106,7 +106,8 @@ def run_fold(k, sp, X, a, device):
         train_idx, val_idx, test_idx, ind_idx = train_idx[:48], val_idx[:32], test_idx[:32], ind_idx[:8]
 
     mk = lambda idx, y, tr_: DataLoader(PatchSet(X, idx, y, tr_), batch_size=a.bs, shuffle=tr_, drop_last=tr_ and len(idx) > a.bs,
-                                         num_workers=a.workers, pin_memory=True, persistent_workers=a.workers > 0)
+                                         num_workers=a.workers if tr_ else 0, pin_memory=True,
+                                         persistent_workers=tr_ and a.workers > 0)
     dl_tr, dl_va, dl_te, dl_in = mk(train_idx, y_train, True), mk(val_idx, y_eval, False), mk(test_idx, y_eval, False), \
         (mk(ind_idx, y_eval, False) if len(ind_idx) else None)
 
@@ -165,7 +166,17 @@ def main():
     X = load_patches(a.data, sp.patch_file.values); print(f"  {X.nbytes/1e9:.1f} GB in {time.time()-t0:.0f}s")
 
     rows, ind_rows, logs = [], [], []
+    f_oof, f_ind, f_log = (a.out / f"oof_predictions_{tag}.csv", a.out / f"oof_indeterminate_{tag}.csv",
+                           a.out / f"train_log_{tag}.csv")
+    done = set()
+    if f_oof.exists() and not a.smoke:                       # RESUME after a disconnect
+        prev = pd.read_csv(f_oof); rows.append(prev); done = set(prev.fold.unique().tolist())
+        if f_ind.exists(): ind_rows.append(pd.read_csv(f_ind))
+        if f_log.exists(): logs += pd.read_csv(f_log).to_dict("records")
+        print("resuming; folds already saved:", sorted(done))
     for k in a.folds:
+        if k in done:
+            print(f"fold {k}: already done, skipping"); continue
         r = run_fold(k, sp, X, a, device); logs += r["log"]
         yv, yt = sp.bin_label.values[r["val_idx"]].astype(int), sp.bin_label.values[r["test_idx"]].astype(int)
         platt = LogisticRegression(C=1e6).fit(r["lv"].reshape(-1, 1), yv)
@@ -181,9 +192,9 @@ def main():
             d = sp.iloc[r["ind_idx"]][["patient_id", "patch_file", "fold", "bin_label", "mal_mean"]].copy()
             d["model"], d["p"] = f"{tag}_platt", platt.predict_proba(r["li"].reshape(-1, 1))[:, 1]; ind_rows.append(d)
         print(f"fold {k}: test AUROC raw {summary(yt, variants[tag + '_raw'][1])['auroc']:.3f}", flush=True)
-        pd.concat(rows).to_csv(a.out / f"oof_predictions_{tag}.csv", index=False)       # saved after every fold
-        pd.DataFrame(logs).to_csv(a.out / f"train_log_{tag}.csv", index=False)
-        if ind_rows: pd.concat(ind_rows).to_csv(a.out / f"oof_indeterminate_{tag}.csv", index=False)
+        pd.concat(rows).to_csv(f_oof, index=False)       # saved after every fold
+        pd.DataFrame(logs).to_csv(f_log, index=False)
+        if ind_rows: pd.concat(ind_rows).to_csv(f_ind, index=False)
     oof = pd.concat(rows)
     for name, g in oof.groupby("model"):
         s = summary(g.bin_label.values, g.p.values); print(f"{name}: AUROC {s['auroc']:.3f} AUPRC {s['auprc']:.3f} ECE {s['ece']:.3f} (n={s['n']})")
